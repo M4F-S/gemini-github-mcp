@@ -45,10 +45,13 @@ HOST="${MCP_HOST:-127.0.0.1}"
 TRANSPORT="${MCP_TRANSPORT:-streamableHttp}"
 MCP_ROUTE="${MCP_PATH:-/mcp}"
 
+SERVER_SCRIPT="$ROOT_DIR/src/server.mjs"
+
 echo "=========================================================="
-echo " Starting GitHub MCP Streamable HTTP Bridge"
+echo " Starting Gemini GitHub MCP Streamable HTTP Bridge (v1.1.0)"
 echo " Host:      $HOST:$PORT"
 echo " Transport: $TRANSPORT ($MCP_ROUTE)"
+echo " Server:    $SERVER_SCRIPT"
 echo " Node:      $NODE_BIN"
 echo " Protocol:  2024-11-05 / 2025-11-25"
 echo "=========================================================="
@@ -60,4 +63,4 @@ exec "$NPX_BIN" -y supergateway \
   --outputTransport "$TRANSPORT" \
   --streamableHttpPath "$MCP_ROUTE" \
   --protocolVersion "2024-11-05" \
-  --stdio "$NPX_BIN -y @modelcontextprotocol/server-github"
+  --stdio "$NODE_BIN $SERVER_SCRIPT"

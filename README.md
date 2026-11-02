@@ -1,22 +1,21 @@
 # Gemini for Mac — GitHub MCP Server Integration & Bridge
 
+[![Version](https://img.shields.io/badge/Release-v1.1.0-blue.svg)](https://github.com/M4F-S/gemini-github-mcp/releases/tag/v1.1.0)
 [![MCP Spec](https://img.shields.io/badge/MCP-2024--11--05-blue.svg)](https://modelcontextprotocol.io/)
 [![Node.js](https://img.shields.io/badge/Node.js-v22+-green.svg)](https://nodejs.org/)
 [![Platform](https://img.shields.io/badge/Platform-macOS-lightgrey.svg)](https://apple.com/macos)
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
-Production-grade bridge and runtime harness enabling Google Gemini for Mac Desktop (`/Applications/Gemini.app`) to interact seamlessly with private and public GitHub repositories via the **Model Context Protocol (MCP)**.
+Production-grade bridge and runtime harness enabling Google Gemini for Mac Desktop (`/Applications/Gemini.app`) to interact seamlessly with private and public GitHub repositories, GitHub Actions CI/CD telemetry, and local-first workflows via the **Model Context Protocol (MCP)**.
 
 ---
 
-## 💡 Why This Exists
+## ⚡ What's New in v1.1.0
 
-Google Gemini for Mac Desktop features custom connector support for external tools, but presents two major architectural challenges:
-
-1. **Cloud-Mediated Execution**: Reasoning is performed by Google's cloud model (**Robin**), which requires external tools to expose a public, TLS-secured **Streamable HTTP** MCP endpoint (`/mcp`) rather than bare local stdio.
-2. **Safety Prior & Refusal Bias**: Raw prompts like *"List my private repositories"* trigger hardcoded refusal fallbacks in the model weights unless steered through native mention chip tokens (`@Github Mcp Server`) and proper GitHub Search API syntax (`is:private`).
-
-This repository provides an automated, end-to-end bridge that connects Gemini Desktop directly to the official `@modelcontextprotocol/server-github` over secure, low-latency tunnels.
+- 🔄 **GitHub Actions CI/CD Telemetry**: Query workflow runs (`get_workflow_runs`), tail failed job logs (`get_workflow_run_logs`), and trigger workflow runs (`trigger_workflow`).
+- ⚡ **Local-First & In-Memory Caching**: ETag caching for instant 0ms responses, plus local disk detection for sub-millisecond code search.
+- 🚀 **Atomic Compound PR Creation**: Create a branch, commit multiple files, and open a Pull Request in a single turn (`create_feature_branch_and_pr`).
+- 🛠️ **Native Server Engine**: Lightweight ES Module engine in [`src/server.mjs`](src/server.mjs) with native `fetch` and zero subprocess bloat.
 
 ---
 
@@ -27,9 +26,10 @@ flowchart LR
     A["Gemini Mac Client<br/>(User Prompt)"] --> B["Google Cloud<br/>(Robin Model)"]
     B -- "HTTPS tools/call<br/>JSON-RPC 2.0" --> C["Cloudflare Tunnel Edge<br/>(Zero-Warning Proxy)"]
     C --> D["Supergateway Bridge<br/>(Streamable HTTP :8124)"]
-    D --> E["@modelcontextprotocol/server-github<br/>(Stdio Runtime)"]
-    E -- "Personal Access Token<br/>(repo scope)" --> F["GitHub REST API<br/>api.github.com"]
-    F -- "Repository Data" --> E
+    D --> E["Gemini GitHub Server<br/>(src/server.mjs)"]
+    E -- "Personal Access Token<br/>(repo, actions)" --> F["GitHub REST API<br/>api.github.com"]
+    E -. "Local Grep (0ms)" .-> G["Local Cloned Repos<br/>~/Desktop, ~/"]
+    F -- "Repository & CI Data" --> E
     E --> D --> C --> B --> A
 ```
 
@@ -51,33 +51,16 @@ cd gemini-github-mcp
 ```
 
 ### 3. Configure Credentials
-Edit `.env` (or `~/.gemini/github_mcp.env`):
 ```bash
 cp config/.env.example .env
-```
-Set your token:
-```env
-GITHUB_PERSONAL_ACCESS_TOKEN="ghp_yourPersonalAccessTokenHere"
+# Edit .env with your GitHub Personal Access Token
 ```
 
 ### 4. Start the Service
 ```bash
 ./bin/service.sh start
-```
-Check status and copy the public HTTPS tunnel URL:
-```bash
 ./bin/service.sh status
 ```
-
----
-
-## 🔌 Connecting to Gemini Desktop
-
-1. Open **Gemini for Mac**.
-2. Navigate to **Customize > Connectors > + Custom**.
-3. Paste your public HTTPS tunnel URL (e.g. `https://your-tunnel-subdomain.trycloudflare.com/mcp`).
-4. Click **Connect**. Gemini will discover all **26 operations** from the GitHub MCP server.
-5. Accept the trust checkbox to register `Github Mcp Server`.
 
 ---
 
@@ -85,14 +68,14 @@ Check status and copy the public HTTPS tunnel URL:
 
 In any Gemini chat window:
 
-### List Private Repositories
+### 1. CI/CD Actions Telemetry
+> `@Github Mcp Server Check the latest workflow runs for M4F-S/Belya and show me why the last run failed.`
+
+### 2. List Private Repositories
 > `@Github Mcp Server Execute search_repositories with query "user:YOUR_USER is:private" and list all private repositories found.`
 
-### Read a File from a Private Repository
-> `@Github Mcp Server get file contents of README.md in repository YOUR_USER/repo-name`
-
-### Create an Issue
-> `@Github Mcp Server create issue in YOUR_USER/repo-name with title "New Feature" and body "Implement MCP hooks"`
+### 3. Single-Turn Atomic PR Creation
+> `@Github Mcp Server create feature branch and PR for M4F-S/repo with branch "feat/patch", base "main", title "Fix build", and body "Fixes CI issue".`
 
 ---
 
@@ -102,7 +85,7 @@ In any Gemini chat window:
 # Start bridge and tunnel
 ./bin/service.sh start
 
-# Check running status and tunnel URL
+# Check status & active tunnel URL
 ./bin/service.sh status
 
 # Stop background services
@@ -114,39 +97,6 @@ In any Gemini chat window:
 # Follow logs in real time
 ./bin/service.sh logs
 ```
-
----
-
-## 📂 Repository Layout
-
-```text
-gemini-github-mcp/
-├── bin/
-│   ├── github-mcp-bridge.sh    # Streamable HTTP bridge runner
-│   ├── cloudflared-tunnel.sh   # Cloudflare tunnel daemon
-│   └── service.sh              # Start/stop/status CLI orchestrator
-├── config/
-│   └── .env.example            # Environment template
-├── launchd/
-│   └── com.google.gemini.github-mcp-bridge.plist # macOS LaunchAgent service
-├── scripts/
-│   ├── install.sh              # One-shot dependency installer
-│   └── test-connection.sh      # Automated JSON-RPC test suite
-├── docs/
-│   ├── ARCHITECTURE.md         # Deep technical specification
-│   ├── TROUBLESHOOTING.md      # Refusal prior and query syntax guide
-│   └── VERIFICATION_REPORT.md  # End-to-end live verification trace
-├── LICENSE                     # Apache 2.0 License
-└── README.md
-```
-
----
-
-## 🛡️ Security & Privacy
-
-- **Never Commit Tokens**: Tokens are stored strictly in local `.env` files and `.gitignore` prevents inadvertent commits.
-- **Explicit Consent**: Gemini Desktop requires user approval via an inline macOS consent card for external tool calls.
-- **Sandboxed Transport**: Supergateway routes traffic through local loopback (`127.0.0.1`), exposed only via authenticated or encrypted Cloudflare tunnels.
 
 ---
 
