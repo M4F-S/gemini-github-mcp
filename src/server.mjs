@@ -14,6 +14,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { execSync } from 'node:child_process';
 
 const PROTOCOL_VERSION = '2024-11-05';
@@ -646,13 +647,14 @@ function startStdio() {
   });
 }
 
-// Streamable HTTP Server Interface
+// Streamable HTTP & SSE Server Interface
 function startHttp(port = 8124, host = '127.0.0.1') {
   const server = http.createServer(async (req, res) => {
     // CORS Headers
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept, MCP-Protocol-Version');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept, MCP-Protocol-Version, Mcp-Session-Id, Authorization');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Type, MCP-Protocol-Version, Mcp-Session-Id');
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
@@ -660,17 +662,51 @@ function startHttp(port = 8124, host = '127.0.0.1') {
       return;
     }
 
-    const url = new URL(req.url, `http://${req.headers.host}`);
+    const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
+    const sessionId = req.headers['mcp-session-id'] || crypto.randomUUID();
+
     if (url.pathname === '/healthz' || url.pathname === '/readyz') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'ok', server: SERVER_NAME, version: SERVER_VERSION }));
       return;
     }
 
-    if (url.pathname === '/mcp' || url.pathname === '/') {
-      if (req.method === 'GET') {
-        res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end(`Gemini GitHub MCP Server v${SERVER_VERSION} is active.`);
+    if (url.pathname === '/mcp' || url.pathname === '/' || url.pathname === '/sse') {
+      const acceptHeader = req.headers['accept'] || '';
+
+      if (req.method === 'GET' || req.method === 'HEAD') {
+        if (acceptHeader.includes('text/event-stream')) {
+          res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'Mcp-Session-Id': sessionId
+          });
+          res.write(`event: endpoint\ndata: /mcp\n\n`);
+          const interval = setInterval(() => {
+            res.write(`event: ping\ndata: {}\n\n`);
+          }, 15000);
+          req.on('close', () => clearInterval(interval));
+          return;
+        }
+
+        // Standard GET / HEAD probe
+        res.writeHead(200, {
+          'Content-Type': 'application/json',
+          'Mcp-Session-Id': sessionId
+        });
+        if (req.method !== 'HEAD') {
+          res.end(JSON.stringify({
+            status: 'ok',
+            server: SERVER_NAME,
+            version: SERVER_VERSION,
+            protocolVersion: PROTOCOL_VERSION,
+            capabilities: { tools: {} },
+            endpoint: '/mcp'
+          }));
+        } else {
+          res.end();
+        }
         return;
       }
 
@@ -682,17 +718,31 @@ function startHttp(port = 8124, host = '127.0.0.1') {
             const msg = JSON.parse(body);
             const response = await handleJsonRpcMessage(msg);
 
-            // Streamable HTTP SSE formatting
-            res.writeHead(200, {
-              'Content-Type': 'text/event-stream',
-              'Cache-Control': 'no-cache',
-              'Connection': 'keep-alive'
-            });
+            // If the client explicitly requests SSE and not application/json
+            const wantsSseOnly = acceptHeader.includes('text/event-stream') &&
+                                 !acceptHeader.includes('application/json') &&
+                                 !acceptHeader.includes('*/*');
 
-            if (response) {
-              res.write(`event: message\ndata: ${JSON.stringify(response)}\n\n`);
+            if (wantsSseOnly) {
+              res.writeHead(200, {
+                'Content-Type': 'text/event-stream',
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'Mcp-Session-Id': sessionId
+              });
+
+              if (response) {
+                res.write(`event: message\ndata: ${JSON.stringify(response)}\n\n`);
+              }
+              res.end();
+            } else {
+              // Standard Streamable HTTP JSON-RPC Response
+              res.writeHead(200, {
+                'Content-Type': 'application/json',
+                'Mcp-Session-Id': sessionId
+              });
+              res.end(JSON.stringify(response || {}));
             }
-            res.end();
           } catch (err) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32700, message: err.message }, id: null }));
